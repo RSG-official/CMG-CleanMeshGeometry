@@ -1,0 +1,4 @@
+test_prog
+*.o
+*.exe
+extracted_*
