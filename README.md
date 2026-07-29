@@ -43,7 +43,7 @@ The format is intended to be easy to implement in any language while remaining f
 
 ### Metadata (.cmgex)
 
-- Object hierarchy
+- Multi-object support
 - Object names
 - Materials
 - UV coordinates
@@ -119,7 +119,7 @@ The repository includes a Blender add-on supporting:
 
 # C++ Library
 
-The repository also provides a native C++ implementation for reading and writing CMG files.
+The repository provides a native C++ implementation for reading CMG files. Write support is planned but not yet implemented.
 
 The library is intentionally lightweight and has minimal dependencies, making it easy to integrate into custom engines or tools.
 
