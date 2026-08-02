@@ -144,3 +144,6 @@ struct CmgMesh {
 
     bool load(const std::string& cmgPath);
 };
+
+
+//this is the end
