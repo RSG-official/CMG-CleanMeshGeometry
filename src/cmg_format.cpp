@@ -2,8 +2,6 @@
 #include <cstring>
 #include <filesystem>
 
-#include <cstring>
-
 // ---------------------------------------------------------------------------
 // Chunk container primitives
 // ---------------------------------------------------------------------------
@@ -18,7 +16,7 @@ bool readHeader(std::ifstream& file, Header& outHeader) {
     file.read(outHeader.magic, 4);
     file.read(reinterpret_cast<char*>(&outHeader.version), sizeof(outHeader.version));
     file.read(reinterpret_cast<char*>(&outHeader.chunkCount), sizeof(outHeader.chunkCount));
-    return file.gcount() == sizeof(outHeader.chunkCount); // crude check, good enough for now
+    return file.gcount() == sizeof(outHeader.chunkCount);
 }
 
 void writeChunk(std::ofstream& file, const char id[4], const std::vector<uint8_t>& data) {
@@ -58,17 +56,6 @@ bool readChunkedFile(const std::string& filename, ChunkedFile& out) {
     }
     return true;
 }
-
-bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError) {
-        if (dataSize % elementSize != 0) {
-                outError = "Chunk '" + chunkId + "' size (" + std::to_string(dataSize) +
-                                    " bytes) is not a multiple of its element size (" + std::to_string(elementSize) + ")";
-                                            return false;
-                                                }
-                                                    return true;
-                                                    }
-}
-
 
 // ---------------------------------------------------------------------------
 // pack/unpack functions
@@ -237,6 +224,19 @@ void saveBytesToFile(const std::string& filename, const std::vector<uint8_t>& da
 }
 
 // ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError) {
+    if (dataSize % elementSize != 0) {
+        outError = "Chunk '" + chunkId + "' size (" + std::to_string(dataSize) +
+                    " bytes) is not a multiple of its element size (" + std::to_string(elementSize) + ")";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // CmgMesh
 // ---------------------------------------------------------------------------
 
@@ -314,10 +314,11 @@ bool CmgMesh::load(const std::string& cmgPath) {
         } else if (id == std::string("MTRL\0", 4)) {
             materials = unpackMaterials(c.data);
         } else if (id == std::string("MIDX\0", 4)) {
-            if (c.data.size() % sizeof(uint16_t) != 0) {
-                lastError = "MIDX chunk has invalid size; skipped";
-            } else {
+            std::string midxError;
+            if (validateChunkSize(id, c.data.size(), sizeof(uint16_t), midxError)) {
                 materialIndices = unpackMaterialIndices(c.data);
+            } else {
+                lastError = midxError;
             }
         } else if (id == std::string("VCOL\0", 4)) {
             vertexColors = unpackVertexColors(c.data);
@@ -327,19 +328,7 @@ bool CmgMesh::load(const std::string& cmgPath) {
             uvIndices = unpackUvIndices(c.data);
         } else if (id == std::string("TXTR\0", 4)) {
             textures = unpackTextures(c.data);
-        } else if (id == std::string("SKEL\0", 4)) {
-            auto parsedBones = unpackSkeleton(c.data);
-            std::string skelError;
-            if (validateSkeleton(parsedBones, skelError)) {
-                bones = parsedBones;
-                hasSkeleton = true;
-            } else {
-                lastError = "Invalid SKEL chunk: " + skelError;
-            }
         }
     }
     return true;
 }
-
-
-//this is the end
