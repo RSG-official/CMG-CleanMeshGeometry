@@ -51,6 +51,8 @@ bool readChunk(std::ifstream& file, Chunk& outChunk);
 
 bool readChunkedFile(const std::string& filename, ChunkedFile& out);
 
+bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError);
+
 // ---------------------------------------------------------------------------
 // Sidecar data structs
 // ---------------------------------------------------------------------------

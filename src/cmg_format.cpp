@@ -2,6 +2,8 @@
 #include <cstring>
 #include <filesystem>
 
+#include <cstring>
+
 // ---------------------------------------------------------------------------
 // Chunk container primitives
 // ---------------------------------------------------------------------------
@@ -56,6 +58,17 @@ bool readChunkedFile(const std::string& filename, ChunkedFile& out) {
     }
     return true;
 }
+
+bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError) {
+        if (dataSize % elementSize != 0) {
+                outError = "Chunk '" + chunkId + "' size (" + std::to_string(dataSize) +
+                                    " bytes) is not a multiple of its element size (" + std::to_string(elementSize) + ")";
+                                            return false;
+                                                }
+                                                    return true;
+                                                    }
+}
+
 
 // ---------------------------------------------------------------------------
 // pack/unpack functions
@@ -229,15 +242,44 @@ void saveBytesToFile(const std::string& filename, const std::vector<uint8_t>& da
 
 bool CmgMesh::load(const std::string& cmgPath) {
     ChunkedFile cmgFile;
-    if (!readChunkedFile(cmgPath, cmgFile)) return false;
+    if (!readChunkedFile(cmgPath, cmgFile)) {
+        lastError = "Could not open or read: " + cmgPath;
+        return false;
+    }
+
+    if (std::memcmp(cmgFile.header.magic, "CMG\0", 4) != 0) {
+        lastError = "Not a valid CMG file (bad magic bytes)";
+        return false;
+    }
+    if (cmgFile.header.version != 0) {
+        lastError = "Unsupported CMG version: " + std::to_string(cmgFile.header.version);
+        return false;
+    }
+
+    bool hasVert = false, hasIndx = false;
 
     for (const auto& c : cmgFile.chunks) {
         std::string id(c.id, 4);
+        std::string chunkError;
+
         if (id == std::string("VERT\0", 4)) {
+            if (!validateChunkSize(id, c.data.size(), sizeof(Vertex), chunkError)) {
+                lastError = chunkError; return false;
+            }
             vertices = unpackVertices(c.data);
+            hasVert = true;
         } else if (id == std::string("INDX\0", 4)) {
+            if (!validateChunkSize(id, c.data.size(), sizeof(uint32_t), chunkError)) {
+                lastError = chunkError; return false;
+            }
             indices = unpackIndices(c.data);
+            hasIndx = true;
         } else if (id == std::string("BBOX\0", 4)) {
+            if (c.data.size() != sizeof(BoundingBox)) {
+                lastError = "BBOX chunk has wrong size (" + std::to_string(c.data.size()) +
+                             " bytes, expected " + std::to_string(sizeof(BoundingBox)) + ")";
+                return false;
+            }
             bbox = unpackBBox(c.data);
         } else if (id == std::string("EXRF\0", 4)) {
             size_t next;
@@ -245,14 +287,24 @@ bool CmgMesh::load(const std::string& cmgPath) {
         }
     }
 
+    if (!hasVert || !hasIndx) {
+        lastError = "File is missing required VERT or INDX chunk";
+        return false;
+    }
+
     if (sidecarName.empty()) return true;
 
     std::filesystem::path cmgDir = std::filesystem::path(cmgPath).parent_path();
     std::filesystem::path sidecarPath = cmgDir / sidecarName;
-    if (!std::filesystem::exists(sidecarPath)) return true;
+    if (!std::filesystem::exists(sidecarPath)) return true; // referenced but missing; not fatal
 
     ChunkedFile exFile;
-    if (!readChunkedFile(sidecarPath.string(), exFile)) return true;
+    if (!readChunkedFile(sidecarPath.string(), exFile)) return true; // failed to read; not fatal
+
+    if (std::memcmp(exFile.header.magic, "CMGX", 4) != 0) {
+        lastError = "Sidecar '" + sidecarName + "' has bad magic bytes; skipped";
+        return true; // sidecar problems don't fail the whole load
+    }
 
     hasSidecar = true;
     for (const auto& c : exFile.chunks) {
@@ -262,7 +314,11 @@ bool CmgMesh::load(const std::string& cmgPath) {
         } else if (id == std::string("MTRL\0", 4)) {
             materials = unpackMaterials(c.data);
         } else if (id == std::string("MIDX\0", 4)) {
-            materialIndices = unpackMaterialIndices(c.data);
+            if (c.data.size() % sizeof(uint16_t) != 0) {
+                lastError = "MIDX chunk has invalid size; skipped";
+            } else {
+                materialIndices = unpackMaterialIndices(c.data);
+            }
         } else if (id == std::string("VCOL\0", 4)) {
             vertexColors = unpackVertexColors(c.data);
         } else if (id == std::string("UVMP\0", 4)) {
@@ -271,9 +327,19 @@ bool CmgMesh::load(const std::string& cmgPath) {
             uvIndices = unpackUvIndices(c.data);
         } else if (id == std::string("TXTR\0", 4)) {
             textures = unpackTextures(c.data);
+        } else if (id == std::string("SKEL\0", 4)) {
+            auto parsedBones = unpackSkeleton(c.data);
+            std::string skelError;
+            if (validateSkeleton(parsedBones, skelError)) {
+                bones = parsedBones;
+                hasSkeleton = true;
+            } else {
+                lastError = "Invalid SKEL chunk: " + skelError;
+            }
         }
     }
     return true;
 }
+
 
 //this is the end
