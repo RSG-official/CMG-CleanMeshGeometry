@@ -5,10 +5,6 @@
 #include <vector>
 #include <fstream>
 
-// ---------------------------------------------------------------------------
-// Basic geometry structs
-// ---------------------------------------------------------------------------
-
 struct Vec3 {
     float x, y, z;
 };
@@ -22,10 +18,6 @@ struct BoundingBox {
     Vec3 min;
     Vec3 max;
 };
-
-// ---------------------------------------------------------------------------
-// Chunk container primitives
-// ---------------------------------------------------------------------------
 
 struct Header {
     char magic[4];
@@ -51,19 +43,13 @@ bool readChunk(std::ifstream& file, Chunk& outChunk);
 
 bool readChunkedFile(const std::string& filename, ChunkedFile& out);
 
-bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError);
-
-// ---------------------------------------------------------------------------
-// Sidecar data structs
-// ---------------------------------------------------------------------------
-
 struct ObjectRange {
     std::string name;
     uint32_t vstart, vcount, tstart, tcount;
 };
 
 struct TextureSlot {
-    uint32_t textureIndex;   // NO_TEXTURE if unused
+    uint32_t textureIndex;
     float uvOffsetX, uvOffsetY;
     float uvScaleX, uvScaleY;
     float uvRotation;
@@ -76,30 +62,20 @@ struct Material {
     float roughness;
     float emissionColor[3];
     float emissionStrength;
-    TextureSlot textures[5]; // order: base_color, normal, roughness, metallic, emission
+    TextureSlot textures[5];
 };
 
 struct Texture {
     std::string name;
     uint8_t role;
     uint8_t mode;
-    std::vector<uint8_t> embeddedBytes; // used if mode == TEXTURE_MODE_EMBEDDED
-    std::string externalPath;           // used if mode == TEXTURE_MODE_EXTERNAL
+    std::vector<uint8_t> embeddedBytes;
+    std::string externalPath;
 };
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-// 'inline' here (C++17) lets these live safely in a header included by
-// multiple .cpp files without causing "multiple definition" linker errors.
 
 inline constexpr uint32_t NO_TEXTURE = 0xFFFFFFFF;
 inline constexpr uint8_t TEXTURE_MODE_EMBEDDED = 0;
 inline constexpr uint8_t TEXTURE_MODE_EXTERNAL = 1;
-
-// ---------------------------------------------------------------------------
-// pack/unpack functions
-// ---------------------------------------------------------------------------
 
 std::vector<uint8_t> packVertices(const std::vector<Vertex>& verts);
 std::vector<Vertex> unpackVertices(const std::vector<uint8_t>& data);
@@ -122,30 +98,30 @@ std::vector<Texture> unpackTextures(const std::vector<uint8_t>& data);
 
 void saveBytesToFile(const std::string& filename, const std::vector<uint8_t>& data);
 
-// ---------------------------------------------------------------------------
-// CmgMesh — the library-facing API
-// ---------------------------------------------------------------------------
+// Returns false and fills outError if dataSize isn't a whole multiple of
+// elementSize — catches corrupted/truncated chunks instead of silently
+// mis-reading or truncating them.
+bool validateChunkSize(const std::string& chunkId, size_t dataSize, size_t elementSize, std::string& outError);
 
 struct CmgMesh {
-    // From .cmg
     BoundingBox bbox;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::string sidecarName;
 
-    // From .cmgex
     std::vector<ObjectRange> objects;
     std::vector<Material> materials;
     std::vector<uint16_t> materialIndices;
-    std::vector<float> vertexColors; // flat, 4 per vertex
-    std::vector<float> uvPool;       // flat, 2 per UV
+    std::vector<float> vertexColors;
+    std::vector<float> uvPool;
     std::vector<uint32_t> uvIndices;
     std::vector<Texture> textures;
 
     bool hasSidecar = false;
 
+    // Empty if load() succeeded with no issues. May be set even when load()
+    // returns true, if the problem was non-fatal (e.g. a bad sidecar).
+    std::string lastError;
+
     bool load(const std::string& cmgPath);
 };
-
-
-//this is the end
