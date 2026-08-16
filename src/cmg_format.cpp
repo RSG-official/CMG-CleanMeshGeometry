@@ -1,6 +1,22 @@
 #include "cmg_format.h"
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
+
+// ---------------------------------------------------------------------------
+// Bounds-checking helper for variable-length sidecar parsing
+// ---------------------------------------------------------------------------
+
+// OBJS/MTRL/TXTR contain variable-length, self-describing records (counts and
+// string lengths read from the data itself). Unlike VERT/INDX/MIDX/etc, their
+// record sizes can't be checked up front with a single divisibility test, so
+// every read of `need` bytes at `offset` is checked here before it happens.
+// Throws on truncated/corrupt data instead of reading past the buffer.
+static void requireBytes(size_t offset, size_t need, size_t dataSize, const char* what) {
+    if (need > dataSize || offset > dataSize - need) {
+        throw std::runtime_error(std::string("truncated or corrupt data while reading ") + what);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Chunk container primitives
@@ -70,7 +86,10 @@ std::vector<uint8_t> packVertices(const std::vector<Vertex>& verts) {
 std::vector<Vertex> unpackVertices(const std::vector<uint8_t>& data) {
     size_t count = data.size() / sizeof(Vertex);
     std::vector<Vertex> verts(count);
-    std::memcpy(verts.data(), data.data(), data.size());
+    // Copy only count*sizeof(Vertex) bytes, not data.size(): if data.size()
+    // isn't an exact multiple of sizeof(Vertex), count is rounded down and
+    // copying the full (larger) data.size() would overflow `verts`.
+    std::memcpy(verts.data(), data.data(), count * sizeof(Vertex));
     return verts;
 }
 
@@ -83,7 +102,7 @@ std::vector<uint8_t> packIndices(const std::vector<uint32_t>& indices) {
 std::vector<uint32_t> unpackIndices(const std::vector<uint8_t>& data) {
     size_t count = data.size() / sizeof(uint32_t);
     std::vector<uint32_t> indices(count);
-    std::memcpy(indices.data(), data.data(), data.size());
+    std::memcpy(indices.data(), data.data(), count * sizeof(uint32_t));
     return indices;
 }
 
@@ -100,10 +119,12 @@ BoundingBox unpackBBox(const std::vector<uint8_t>& data) {
 }
 
 std::string unpackString(const std::vector<uint8_t>& data, size_t offset, size_t& outNextOffset) {
+    requireBytes(offset, 2, data.size(), "string length prefix");
     uint16_t length;
     std::memcpy(&length, data.data() + offset, 2);
     offset += 2;
 
+    requireBytes(offset, length, data.size(), "string data");
     std::string s(reinterpret_cast<const char*>(data.data() + offset), length);
     outNextOffset = offset + length;
     return s;
@@ -113,6 +134,7 @@ std::vector<ObjectRange> unpackObjects(const std::vector<uint8_t>& data) {
     std::vector<ObjectRange> objects;
     size_t offset = 0;
 
+    requireBytes(offset, 4, data.size(), "OBJS count");
     uint32_t count;
     std::memcpy(&count, data.data() + offset, 4);
     offset += 4;
@@ -120,6 +142,7 @@ std::vector<ObjectRange> unpackObjects(const std::vector<uint8_t>& data) {
     for (uint32_t i = 0; i < count; i++) {
         ObjectRange obj;
         obj.name = unpackString(data, offset, offset);
+        requireBytes(offset, 16, data.size(), "OBJS range fields");
         std::memcpy(&obj.vstart, data.data() + offset, 4); offset += 4;
         std::memcpy(&obj.vcount, data.data() + offset, 4); offset += 4;
         std::memcpy(&obj.tstart, data.data() + offset, 4); offset += 4;
@@ -133,6 +156,7 @@ std::vector<Material> unpackMaterials(const std::vector<uint8_t>& data) {
     std::vector<Material> materials;
     size_t offset = 0;
 
+    requireBytes(offset, 4, data.size(), "MTRL count");
     uint32_t count;
     std::memcpy(&count, data.data() + offset, 4);
     offset += 4;
@@ -140,6 +164,12 @@ std::vector<Material> unpackMaterials(const std::vector<uint8_t>& data) {
     for (uint32_t i = 0; i < count; i++) {
         Material mat;
         mat.name = unpackString(data, offset, offset);
+
+        // Fixed-size portion of a material record: baseColor(16) + metallic(4) +
+        // roughness(4) + emissionColor(12) + emissionStrength(4) + 5 texture
+        // slots(24 each) = 160 bytes. Checked once up front so the sequential
+        // memcpys below are all guaranteed in-bounds.
+        requireBytes(offset, 160, data.size(), "MTRL fixed fields");
 
         std::memcpy(mat.baseColor, data.data() + offset, sizeof(mat.baseColor)); offset += sizeof(mat.baseColor);
         std::memcpy(&mat.metallic, data.data() + offset, 4); offset += 4;
@@ -166,6 +196,7 @@ std::vector<Texture> unpackTextures(const std::vector<uint8_t>& data) {
     std::vector<Texture> textures;
     size_t offset = 0;
 
+    requireBytes(offset, 4, data.size(), "TXTR count");
     uint32_t count;
     std::memcpy(&count, data.data() + offset, 4);
     offset += 4;
@@ -174,13 +205,16 @@ std::vector<Texture> unpackTextures(const std::vector<uint8_t>& data) {
         Texture tex;
         tex.name = unpackString(data, offset, offset);
 
+        requireBytes(offset, 2, data.size(), "TXTR role/mode");
         std::memcpy(&tex.role, data.data() + offset, 1); offset += 1;
         std::memcpy(&tex.mode, data.data() + offset, 1); offset += 1;
 
         if (tex.mode == TEXTURE_MODE_EMBEDDED) {
+            requireBytes(offset, 4, data.size(), "TXTR embedded byte length");
             uint32_t byteLen;
             std::memcpy(&byteLen, data.data() + offset, 4);
             offset += 4;
+            requireBytes(offset, byteLen, data.size(), "TXTR embedded bytes");
             tex.embeddedBytes.assign(data.begin() + offset, data.begin() + offset + byteLen);
             offset += byteLen;
         } else {
@@ -195,21 +229,21 @@ std::vector<Texture> unpackTextures(const std::vector<uint8_t>& data) {
 std::vector<uint16_t> unpackMaterialIndices(const std::vector<uint8_t>& data) {
     size_t count = data.size() / sizeof(uint16_t);
     std::vector<uint16_t> indices(count);
-    std::memcpy(indices.data(), data.data(), data.size());
+    std::memcpy(indices.data(), data.data(), count * sizeof(uint16_t));
     return indices;
 }
 
 std::vector<float> unpackVertexColors(const std::vector<uint8_t>& data) {
     size_t count = data.size() / sizeof(float);
     std::vector<float> colors(count);
-    std::memcpy(colors.data(), data.data(), data.size());
+    std::memcpy(colors.data(), data.data(), count * sizeof(float));
     return colors;
 }
 
 std::vector<float> unpackUvPool(const std::vector<uint8_t>& data) {
     size_t count = data.size() / sizeof(float);
     std::vector<float> uvs(count);
-    std::memcpy(uvs.data(), data.data(), data.size());
+    std::memcpy(uvs.data(), data.data(), count * sizeof(float));
     return uvs;
 }
 
@@ -318,28 +352,52 @@ bool CmgMesh::load(const std::string& cmgPath) {
     }
 
     hasSidecar = true;
-    for (const auto& c : exFile.chunks) {
-        std::string id(c.id, 4);
-        if (id == std::string("OBJS\0", 4)) {
-            objects = unpackObjects(c.data);
-        } else if (id == std::string("MTRL\0", 4)) {
-            materials = unpackMaterials(c.data);
-        } else if (id == std::string("MIDX\0", 4)) {
-            std::string midxError;
-            if (validateChunkSize(id, c.data.size(), sizeof(uint16_t), midxError)) {
-                materialIndices = unpackMaterialIndices(c.data);
-            } else {
-                lastError = midxError;
+    try {
+        for (const auto& c : exFile.chunks) {
+            std::string id(c.id, 4);
+            if (id == std::string("OBJS\0", 4)) {
+                objects = unpackObjects(c.data);
+            } else if (id == std::string("MTRL\0", 4)) {
+                materials = unpackMaterials(c.data);
+            } else if (id == std::string("MIDX\0", 4)) {
+                std::string midxError;
+                if (validateChunkSize(id, c.data.size(), sizeof(uint16_t), midxError)) {
+                    materialIndices = unpackMaterialIndices(c.data);
+                } else {
+                    lastError = midxError;
+                }
+            } else if (id == std::string("VCOL\0", 4)) {
+                std::string vcolError;
+                if (validateChunkSize(id, c.data.size(), sizeof(float) * 4, vcolError)) {
+                    vertexColors = unpackVertexColors(c.data);
+                } else {
+                    lastError = vcolError;
+                }
+            } else if (id == std::string("UVMP\0", 4)) {
+                std::string uvmpError;
+                if (validateChunkSize(id, c.data.size(), sizeof(float) * 2, uvmpError)) {
+                    uvPool = unpackUvPool(c.data);
+                } else {
+                    lastError = uvmpError;
+                }
+            } else if (id == std::string("UVIX\0", 4)) {
+                std::string uvixError;
+                if (validateChunkSize(id, c.data.size(), sizeof(uint32_t), uvixError)) {
+                    uvIndices = unpackUvIndices(c.data);
+                } else {
+                    lastError = uvixError;
+                }
+            } else if (id == std::string("TXTR\0", 4)) {
+                textures = unpackTextures(c.data);
             }
-        } else if (id == std::string("VCOL\0", 4)) {
-            vertexColors = unpackVertexColors(c.data);
-        } else if (id == std::string("UVMP\0", 4)) {
-            uvPool = unpackUvPool(c.data);
-        } else if (id == std::string("UVIX\0", 4)) {
-            uvIndices = unpackUvIndices(c.data);
-        } else if (id == std::string("TXTR\0", 4)) {
-            textures = unpackTextures(c.data);
         }
+    } catch (const std::exception& e) {
+        // A chunk's self-described lengths didn't match its actual data
+        // (truncated/corrupt sidecar). Whatever chunks parsed before the
+        // failure are kept; this is treated as non-fatal, same as other
+        // sidecar problems, so core geometry is still usable.
+        lastError = "Sidecar '" + sidecarName + "' contains corrupt or truncated data (" +
+                    e.what() + "); partially loaded";
     }
     return true;
 }
