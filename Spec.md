@@ -99,6 +99,14 @@ Flat array of uint32, 3 per triangle. Triangle count = `size / 12`.
 One length-prefixed string (see §7): the sidecar's filename, resolved relative
 to the directory containing the `.cmg` file.
 
+**Reader lookup rule:** a reader MUST first try the exact filename stored in
+`EXRF`. If no file exists at that path, the reader SHOULD fall back to
+`<cmg_basename>.cmgex` in the same directory (e.g. `model.cmg` → `model.cmgex`)
+before treating the sidecar as missing. This tolerates the `.cmg`/`.cmgex` pair
+being renamed together without keeping `EXRF`'s stored string in sync. If
+neither the stored name nor the fallback name exists, the sidecar is treated
+as absent; this is not a fatal error for the `.cmg` load.
+
 ### `OBJS`
 ```
 uint32   object_count

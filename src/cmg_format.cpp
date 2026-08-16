@@ -296,7 +296,18 @@ bool CmgMesh::load(const std::string& cmgPath) {
 
     std::filesystem::path cmgDir = std::filesystem::path(cmgPath).parent_path();
     std::filesystem::path sidecarPath = cmgDir / sidecarName;
-    if (!std::filesystem::exists(sidecarPath)) return true; // referenced but missing; not fatal
+    if (!std::filesystem::exists(sidecarPath)) {
+        // Referenced sidecar not found under its stored name. Fall back to the
+        // conventional "<cmgname>.cmgex" alongside the .cmg file before giving up,
+        // since EXRF's stored name and the actual file can drift (e.g. asset
+        // renames) while the sidecar is still colocated.
+        std::filesystem::path fallbackPath = cmgDir / (std::filesystem::path(cmgPath).stem().string() + ".cmgex");
+        if (fallbackPath != sidecarPath && std::filesystem::exists(fallbackPath)) {
+            sidecarPath = fallbackPath;
+        } else {
+            return true; // referenced but missing, and no fallback found; not fatal
+        }
+    }
 
     ChunkedFile exFile;
     if (!readChunkedFile(sidecarPath.string(), exFile)) return true; // failed to read; not fatal
