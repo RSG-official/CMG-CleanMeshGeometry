@@ -101,7 +101,7 @@ Applications that only need geometry can ignore `.cmgex` entirely.
 
 # Blender Add-on
 
-https://github.com/RSG-official/cmg-blender-addon/blob/main/addon/cmg.py
+https://github.com/RSG-official/cmg-blender-addon
 
  Above repository includes a Blender add-on supporting:
 
